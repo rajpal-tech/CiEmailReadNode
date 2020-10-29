@@ -7,13 +7,15 @@ const readline = require('readline');
 const {google} = require('googleapis');
 const gmail = google.gmail('v1');
 var mysql = require('mysql');
+const { promiseImpl } = require('ejs');
 
 var con = mysql.createConnection({
   host: "localhost",
   user: "root",
   password: "Techugo@123",
-  database: "lal10_db"
+  database: "lal10"
 });
+
 
 // If modifying these scopes, delete token.json.
 // const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']; // only gmail reading
@@ -28,13 +30,14 @@ const SCOPES = ['https://mail.google.com/'];   // full access to gmail
 const TOKEN_PATH = 'token.json';
 
 // Load client secrets from a local file."
-fs.readFile('credentials.json', (err, content) => {
+fs.readFile('credentials.json', (err, content) =>   {
   if (err) return console.log('Error loading client secret file:', err);
   // Authorize a client with credentials, then call the Gmail API.
 
   // console.log("content",content)
   // authorize(JSON.parse(content), listLabels);
   authorize(JSON.parse(content), displayInbox);
+  // authorize(JSON.parse(content), listMessages);
 
 });
 
@@ -58,6 +61,7 @@ function authorize(credentials, callback) {
     callback(oAuth2Client);
   });
 }
+
 
 /**
  * Get and store new token after prompting for user authorization, and then
@@ -92,33 +96,7 @@ function getNewToken(oAuth2Client, callback) {
   });
 }
 
-/**
- * Lists the labels in the user's account.
- *
- * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
- */
-async function listLabels(auth) {
-  
-  const gmail = google.gmail({version: 'v1', auth});
 
-  gmail.users.labels.list({
-    userId: 'me',
-  }, async (err, res) => {
-    if (err) return console.log('The API returned an error: ' + err);
-    
-    const labels = res.data.labels;
-    if (labels.length) {
-
-      console.log('Labels:');
-      labels.forEach((label) => {
-        console.log(`- ${label.name}`);
-      });
-    } else {
-      console.log('No labels found.');
-    }
-
-  });
-}
 
 /**
  * Get the recent email from your Gmail account
@@ -126,89 +104,148 @@ async function listLabels(auth) {
  * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
  */
 
-function displayInbox(auth) {
+ function displayInbox(auth) {
 
   let request = gmail.users.messages.list({auth: auth,
     'userId': 'me',
     'labelIds': 'INBOX',
-    'maxResults': 1
-  }, function(err, response) {
+    // 'maxResults': 1
+  }, async function(err, response) {
       if (err) {
           console.log('The API returned an error: ' + err);
           return;
       }
-      
-      let result=response['data']['messages'];
 
-      result.forEach((element, i) => {        
+     let result=response['data']['messages'];
+     console.log("result===",result)
+     let dt= await saveData(result,auth);
+     console.log("dt===",dt)
 
-        // console.log("MessageId",element.id)
-
-        gmail.users.messages.get({auth: auth, userId: 'me', 'id': element.id}, function( err, response ) {
-          if (err) {
-              console.log('The API returned an error: ' + err);
-              return;
-          }  
-
-          // let body = response['data']['payload']['parts'][0]['body']['data'];  
-
-          let header=response['data']['payload']['headers'];
-          let headerJson = JSON.stringify(header);
-
-          // let body = response['data']['payload']['parts']  // when part is multiple 
-          
-          let body = response['data']['payload']['parts'][0]['body']['data']  // only getting a single top part 
-
-          // let buff = new Buffer.from(body, 'base64');  
-          // let text = buff.toString();
-           
-          // console.log("body===",body);                  
-          console.log("text===",response['data']);                  
-
-          // let saveData;
-
-          // saveData['body']=text;
-          // saveData['header']=headerJson;
-           
-          con.connect(function(err) {
-            if (err) throw err;
-            console.log("Connected!");
-
-            // let sql = `INSERT INTO email_data (header,body) VALUES ('${saveData}')`;
-            let sql = `INSERT INTO email_data (header,body,messageId) VALUES ('${headerJson}','${body}','${response['data']['id']}')`;
-
-            console.log("sql===",sql);
-
-            con.query(sql, function (err, result) {
-              
-              console.log("result===",result);
-
-              if (err) throw err;
-              console.log("1 record inserted");
-            });
-          });
-
-
-          // var data = JSON.parse(abc);
-          // var responseJson = JSON.stringify(data.response);
-
-          // var query = connection.query('INSERT INTO email_data SET header=?', [responseJson], function(err, result) {
-          //     if(err) throw err;
-          //     console.log('data inserted');
-          // });
-          
-          // console.log("abc==",abc)
-          // let data2 = body[0].body['data'];  
-
-          // let buff = new Buffer.from(body, 'base64');  
-          // let text = buff.toString();
-
-          // console.log("body===",abc);
-
-
-        })
-      })
-});
-  
-
+    })
 }
+
+
+async function saveData(result2,auth){
+
+    return new Promise((resolve, reject) => {
+
+  var itemsProcessed = 0;
+
+  result2.forEach((element, i) => {
+
+    gmail.users.messages.get({auth: auth, userId: 'me', 'id': element.id}, function( err, response ) {
+      if (err) {
+          console.log('The API returned an error: ' + err);
+          return;
+      }
+
+      itemsProcessed++;
+
+     let header=response['data']['payload']['headers'];
+     let headerJson = JSON.stringify(header);
+         headerJson = headerJson.replace("'", "");
+
+      let body,body2;
+      if(response['data']['payload']['parts']){
+        body = new Buffer.from(response['data']['payload']['parts'][0]['body']['data'], 'base64');
+        body = body.toString()
+        body = body.replace(/'/g,"");
+        body = body.replace("'","");
+
+      }else{
+        body = new Buffer.from(response['data']['payload']['body']['data'],'base64');
+        body=body.toString()
+        body = body.replace(/'/g,"");
+        body = body.replace("'","");
+      }
+
+
+        let sql=`INSERT INTO email_data (header,body,messageId) SELECT * FROM (SELECT '${headerJson}' as t1 ,'${body}' as t2,'${response['data']['id']}' as t4) AS tmp WHERE NOT EXISTS (SELECT messageId FROM email_data WHERE messageId = '${response['data']['id']}')`;
+        console.log("sql===",sql);
+          con.query(sql, function (err, result) {
+
+            // if (err) throw err;
+            console.log("result===",result);
+            console.log(response['data']['id'],result);
+          if(itemsProcessed === result2.length) {
+            resolve("true");
+          }
+        });
+      });
+    })
+  })
+}
+/**
+ * Lists the labels in the user's account.
+ *
+ * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
+ */
+
+async function listMessages(auth) {
+  return new Promise((resolve, reject) => {
+    const gmail = google.gmail({version: 'v1', auth});
+    gmail.users.messages.list({userId: 'me'},
+     (err, res) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (!res.data.messages) {
+          resolve([]);
+          return;
+        }
+
+        console.log("res.data.message=>>>>>ID",res.data.messages);
+
+        // console.log("res.data.message=>>>>>ThreadId",res.data.messages[0]['threadId']);
+
+        // con.connect(function(err) {
+        //   if (err) throw err;
+        //   console.log("Connected!");
+
+        //   // let sql = `INSERT INTO email_data (header,body) VALUES ('${saveData}')`;
+        //   let sql = `INSERT INTO email_data (header) VALUES ('${res.data.messages}')`;
+
+        //   console.log("sql===",sql);
+
+        //   con.query(sql, function (err, result) {
+
+        //     console.log("result===",result);
+
+        //     if (err) throw err;
+        //     console.log(" record inserted");
+        //   });
+        // });
+
+        resolve(res.data.messages);
+      });
+  });
+};
+
+// /**
+//  * Lists the labels in the user's account.
+//  *
+//  * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
+//  */
+// async function listLabels(auth) {
+
+//   const gmail = google.gmail({version: 'v1', auth});
+
+//   gmail.users.labels.list({
+//     userId: 'me',
+//   }, async (err, res) => {
+//     if (err) return console.log('The API returned an error: ' + err);
+
+//     const labels = res.data.labels;
+//     if (labels.length) {
+
+//       console.log('Labels:');
+//       labels.forEach((label) => {
+//         console.log(`- ${label.name}`);
+//       });
+//     } else {
+//       console.log('No labels found.');
+//     }
+
+//   });
+// }
